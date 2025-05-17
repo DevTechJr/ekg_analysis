@@ -4,6 +4,7 @@ import threading
 import time
 from scipy.signal import find_peaks, savgol_filter
 import numpy as np
+import statistics
 from threading import Lock
 
 app = Flask(__name__)
@@ -19,6 +20,7 @@ BATCH_SIZE = 500
 ekg_data = []
 last_batch_time = None
 batch_interval_seconds = None
+arrhythmia_detected = False
 
 def format_ekg_preview(data):
     preview = ", ".join(str(v) for v in data[:10])
@@ -92,6 +94,37 @@ def calculate_bpm(EKGvals, timeElapsedMs):
     bpm = beatsPerSecond * 60
     return round(bpm, 1)
 
+def arrhythmia_exists(EKGvals):
+    if len(EKGvals) < 30:
+        return False
+        
+    y = np.array(EKGvals)
+    y_smooth = savgol_filter(y, window_length=min(21, len(y) // 2 * 2 + 1), polyorder=3)
+    peaks, _ = find_peaks(y_smooth, distance=10, prominence=5)
+    valleys, _ = find_peaks(-y_smooth, distance=10, prominence=5)
+    
+    cycle_peaks = []
+    for i in range(len(valleys) - 1):
+        start, end = valleys[i], valleys[i + 1]
+        cycle_peak_indices = [p for p in peaks if start < p < end]
+        cycle_peaks.extend(cycle_peak_indices)
+    
+    if len(cycle_peaks) < 4:  # Need at least 4 peaks to compare
+        return False
+        
+    peaks_with_values = get_peaks_with_values(cycle_peaks, y_smooth)
+    peak_distances = [int(peaks_with_values[i][0] - peaks_with_values[i - 3][0]) 
+                     for i in range(3, len(peaks_with_values))]
+    
+    if not peak_distances:
+        return False
+        
+    st_dev = statistics.stdev(peak_distances)
+    mean_distance = statistics.mean(peak_distances)
+    
+    # Thresholds for arrhythmia detection
+    return st_dev > 20 or mean_distance < 100 or mean_distance > 180
+
 threading.Thread(target=read_ekg_data, daemon=True).start()
 
 @app.route("/")
@@ -100,6 +133,8 @@ def index():
 
 @app.route("/data")
 def get_data():
+    global arrhythmia_detected
+    
     with data_lock:
         ekg_snapshot = ekg_data[-BATCH_SIZE:]
         interval_snapshot = batch_interval_seconds
@@ -110,6 +145,8 @@ def get_data():
             ekg_snapshot,
             interval_snapshot * 1000
         )
+        # Run arrhythmia detection only when we have a valid interval
+        arrhythmia_detected = arrhythmia_exists(ekg_snapshot)
     else:
         bpm = None  # Skip BPM calculation for bad intervals
 
@@ -118,13 +155,15 @@ def get_data():
     elif interval_snapshot:
         print(f"⚠️ Skipped BPM calculation: invalid interval {interval_snapshot}s")
 
+    if arrhythmia_detected:
+        print("⚠️⚠️⚠️ ARRHYTHMIA DETECTED! ⚠️⚠️⚠️")
+
     return jsonify({
         "ekg": ekg_snapshot,
         "interval": interval_snapshot,
-        "bpm": bpm
+        "bpm": bpm,
+        "arrhythmia": arrhythmia_detected
     })
-
-
 
 if __name__ == "__main__":
     app.run(debug=True)
