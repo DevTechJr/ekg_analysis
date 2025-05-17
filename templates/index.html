@@ -32,17 +32,29 @@
         text-align: center;
         font-size: 1.1em;
       }
-      #arrhythmiaWarning {
+      #arrhythmiaWarning,
+      #vfibWarning,
+      #afibWarning {
         display: none;
-        color: #e74c3c;
         font-size: 20px;
         font-weight: bold;
         text-align: center;
         margin-top: 15px;
-        animation: flash 1s infinite;
         padding: 10px;
-        background: rgba(231, 76, 60, 0.1);
         border-radius: 5px;
+        animation: flash 1s infinite;
+      }
+      #arrhythmiaWarning {
+        color: #e74c3c;
+        background: rgba(231, 76, 60, 0.1);
+      }
+      #vfibWarning {
+        color: #d35400;
+        background: rgba(211, 84, 0, 0.1);
+      }
+      #afibWarning {
+        color: #f39c12;
+        background: rgba(243, 156, 18, 0.1);
       }
       @keyframes flash {
         0%,
@@ -66,6 +78,17 @@
       .status-warning {
         background-color: #e74c3c;
       }
+      .status-vfib {
+        background-color: #d35400;
+      }
+      .status-afib {
+        background-color: #f39c12;
+      }
+      .alert-container {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
     </style>
   </head>
   <body>
@@ -79,9 +102,20 @@
         Data Interval: <span id="interval">Loading...</span>
       </div>
       <div class="info" id="bpmDisplay">❤️ BPM: --</div>
-      <div id="arrhythmiaWarning">
-        <i class="fas fa-heartbeat"></i> ⚠️ ARRHYTHMIA DETECTED!
-        <i class="fas fa-heartbeat"></i>
+
+      <div class="alert-container">
+        <div id="arrhythmiaWarning">
+          <i class="fas fa-heartbeat"></i> ⚠️ ARRHYTHMIA DETECTED!
+          <i class="fas fa-heartbeat"></i>
+        </div>
+        <div id="vfibWarning">
+          <i class="fas fa-heartbeat"></i> ⚠️⚠️ VENTRICULAR FIBRILLATION
+          DETECTED! ⚠️⚠️ <i class="fas fa-heartbeat"></i>
+        </div>
+        <div id="afibWarning">
+          <i class="fas fa-heartbeat"></i> ⚠️ ATRIAL FIBRILLATION DETECTED! ⚠️
+          <i class="fas fa-heartbeat"></i>
+        </div>
       </div>
     </div>
 
@@ -118,12 +152,15 @@
 
       const bpmDisplay = document.getElementById("bpmDisplay");
       const arrhythmiaWarning = document.getElementById("arrhythmiaWarning");
+      const vfibWarning = document.getElementById("vfibWarning");
+      const afibWarning = document.getElementById("afibWarning");
       const statusIndicator = document.getElementById("statusIndicator");
 
       async function fetchData() {
         try {
           const res = await fetch("/data");
-          const { ekg, interval, bpm, arrhythmia } = await res.json();
+          const { ekg, interval, bpm, arrhythmia, vfib, afib } =
+            await res.json();
 
           ekgChart.data.labels = ekg.map((_, i) => i);
           ekgChart.data.datasets[0].data = ekg;
@@ -134,12 +171,22 @@
           bpmDisplay.textContent =
             bpm !== null ? `❤️ BPM: ${bpm}` : "❤️ BPM: --";
 
-          if (arrhythmia) {
-            arrhythmiaWarning.style.display = "block";
+          // Update warning displays
+          arrhythmiaWarning.style.display = arrhythmia ? "block" : "none";
+          vfibWarning.style.display = vfib ? "block" : "none";
+          afibWarning.style.display = afib ? "block" : "none";
+
+          // Update status indicator
+          if (vfib) {
+            statusIndicator.className = "status-indicator status-vfib";
+            document.title = "⚠️ VFIB DETECTED - EKG Monitor";
+          } else if (afib) {
+            statusIndicator.className = "status-indicator status-afib";
+            document.title = "⚠️ AFIB DETECTED - EKG Monitor";
+          } else if (arrhythmia) {
             statusIndicator.className = "status-indicator status-warning";
-            document.title = "⚠️ ARRHYTHMIA DETECTED - EKG Monitor";
+            document.title = "⚠️ ARRHYTHMIA - EKG Monitor";
           } else {
-            arrhythmiaWarning.style.display = "none";
             statusIndicator.className = "status-indicator status-normal";
             document.title = "Real-Time EKG Monitor";
           }

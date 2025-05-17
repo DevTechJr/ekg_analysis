@@ -2,7 +2,8 @@ from flask import Flask, jsonify, render_template
 import telnetlib
 import threading
 import time
-from scipy.signal import find_peaks, savgol_filter
+from scipy.signal import find_peaks, savgol_filter, welch
+from scipy.stats import entropy
 import numpy as np
 import statistics
 from threading import Lock
@@ -21,6 +22,8 @@ ekg_data = []
 last_batch_time = None
 batch_interval_seconds = None
 arrhythmia_detected = False
+vfib_detected = False
+afib_detected = False
 
 def format_ekg_preview(data):
     preview = ", ".join(str(v) for v in data[:10])
@@ -125,6 +128,80 @@ def arrhythmia_exists(EKGvals):
     # Thresholds for arrhythmia detection
     return st_dev > 20 or mean_distance < 100 or mean_distance > 180
 
+def detect_vfib_afib(EKGvals):
+    global vfib_detected, afib_detected
+    
+    if len(EKGvals) < 100:  # Need enough data for reliable detection
+        return False, False
+    
+    y = np.array(EKGvals)
+    
+    # Normalize signal
+    y = (y - np.mean(y)) / np.std(y)
+    
+    # Smooth signal
+    y_smooth = savgol_filter(y, window_length=21, polyorder=3)
+    
+    # Parameters for windowing
+    window_size = min(250, len(y_smooth))  # 1 second window at 250 Hz
+    stride = window_size // 2
+    
+    def compute_rms(window):
+        return np.sqrt(np.mean(window ** 2))
+    
+    def compute_spectral_entropy(window, fs=250, nperseg=128):
+        f, Pxx = welch(window, fs=fs, nperseg=nperseg)
+        Pxx_norm = Pxx / np.sum(Pxx)
+        return entropy(Pxx_norm)
+    
+    def count_r_peaks(signal_segment, height_thresh=0.5, distance=20):
+        peaks, _ = find_peaks(signal_segment, height=height_thresh, distance=distance)
+        return len(peaks)
+    
+    # Analyze windows
+    vfib_windows = []
+    flatline_windows = []
+    
+    for i in range(0, len(y_smooth) - window_size, stride):
+        window = y_smooth[i:i + window_size]
+        rms = compute_rms(window)
+        ent = compute_spectral_entropy(window)
+        peak_count = count_r_peaks(window, height_thresh=0.5, distance=20)
+        
+        # VFib detection criteria
+        if rms < 0.4 and ent > 1.8:
+            vfib_windows.append((i, i + window_size))
+        # Flatline detection
+        elif rms < 0.25 and ent < 1.5:
+            flatline_windows.append((i, i + window_size))
+    
+    # Merge adjacent windows
+    def merge_windows(windows, max_gap=1):
+        if not windows:
+            return []
+        merged = []
+        current_start, current_end = windows[0]
+        for start, end in windows[1:]:
+            if start <= current_end + max_gap * stride:
+                current_end = max(current_end, end)
+            else:
+                merged.append((current_start, current_end))
+                current_start, current_end = start, end
+        merged.append((current_start, current_end))
+        return merged
+    
+    vfib_windows_merged = merge_windows(vfib_windows)
+    
+    # Final VFib detection requires at least 3 seconds of continuous VFib
+    vfib_duration_threshold = 3 * window_size
+    vfib_detected = any((end - start) >= vfib_duration_threshold 
+                     for start, end in vfib_windows_merged)
+    
+    # AFib is detected if arrhythmia exists but not VFib
+    afib_detected = not vfib_detected and arrhythmia_exists(EKGvals)
+    
+    return vfib_detected, afib_detected
+
 threading.Thread(target=read_ekg_data, daemon=True).start()
 
 @app.route("/")
@@ -133,7 +210,7 @@ def index():
 
 @app.route("/data")
 def get_data():
-    global arrhythmia_detected
+    global arrhythmia_detected, vfib_detected, afib_detected
     
     with data_lock:
         ekg_snapshot = ekg_data[-BATCH_SIZE:]
@@ -147,22 +224,31 @@ def get_data():
         )
         # Run arrhythmia detection only when we have a valid interval
         arrhythmia_detected = arrhythmia_exists(ekg_snapshot)
+        
+        # If arrhythmia detected, run VFib/AFib detection
+        if arrhythmia_detected:
+            vfib_detected, afib_detected = detect_vfib_afib(ekg_snapshot)
+            if vfib_detected:
+                print("⚠️⚠️⚠️ VENTRICULAR FIBRILLATION DETECTED! ⚠️⚠️⚠️")
+            elif afib_detected:
+                print("⚠️⚠️⚠️ ATRIAL FIBRILLATION DETECTED! ⚠️⚠️⚠️")
     else:
         bpm = None  # Skip BPM calculation for bad intervals
+        vfib_detected = False
+        afib_detected = False
 
     if bpm is not None:
         print(f"❤️ Calculated BPM: {bpm}")
     elif interval_snapshot:
         print(f"⚠️ Skipped BPM calculation: invalid interval {interval_snapshot}s")
 
-    if arrhythmia_detected:
-        print("⚠️⚠️⚠️ ARRHYTHMIA DETECTED! ⚠️⚠️⚠️")
-
     return jsonify({
         "ekg": ekg_snapshot,
         "interval": interval_snapshot,
         "bpm": bpm,
-        "arrhythmia": arrhythmia_detected
+        "arrhythmia": arrhythmia_detected,
+        "vfib": vfib_detected,
+        "afib": afib_detected
     })
 
 if __name__ == "__main__":
