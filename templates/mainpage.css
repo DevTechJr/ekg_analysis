@@ -1,0 +1,78 @@
+   body {
+      margin: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: linear-gradient(to right, #f7f9fb, #e3f2fd);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      color: #2c3e50;
+      margin: 30px 0 20px;
+      opacity: 0;
+      animation: fadeIn 1s forwards ease-out;
+    }
+
+    .diagnosis-box {
+      background: #fff;
+      border-radius: 20px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+      padding: 30px;
+      width: 95%;
+      max-width: 1000px;
+      text-align: center;
+      transform: translateY(50px);
+      opacity: 0;
+      animation: slideUp 1s 0.5s forwards ease-out;
+    }
+
+    .diagnosis-box h2 {
+      color: #34495e;
+      margin: 15px 0;
+    }
+
+    #chart-container {
+      width: 100%;
+      overflow-x: scroll;
+      margin-top: 20px;
+    }
+
+    #chart {
+      width: 3500px;
+      height: 100px;
+    }
+
+    #fileInput, #thresholdInput {
+      margin-top: 20px;
+    }
+
+    #loading {
+      margin-top: 10px;
+      font-style: italic;
+      color: #888;
+      display: none;
+    }
+
+    label {
+      display: block;
+      margin-top: 20px;
+      color: #2c3e50;
+    }
+
+    @keyframes fadeIn {
+      to {
+        opacity: 1;
+      }
+    }
+
+    @keyframes slideUp {
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }

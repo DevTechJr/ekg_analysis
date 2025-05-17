@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AFib Diagnosis - Live Data</title>
+
+  <link rel="stylesheet" href="hacks.css" />
+
+  <style>
+ 
+  </style>
+</head>
+<body>
+  <div class="diagnosis-box">
+    <h1>Your Heart Rhythm Diagnosis (Live Data)</h1>
+
+    <label for="thresholdInput">
+      AFib Detection Sensitivity (avg. diff): 
+      <span id="thresholdValue">20</span>
+    </label>
+    <input type="range" id="thresholdInput" min="5" max="100" value="20" step="1" />
+
+    <p id="loading">⏳ Loading and analyzing...</p>
+    <h2 id="diagnosis">Waiting for live data...</h2>
+
+    <div id="chart-container">
+      <canvas id="chart"></canvas>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    const thresholdInput = document.getElementById("thresholdInput");
+    const thresholdValue = document.getElementById("thresholdValue");
+    const diagnosisText = document.getElementById("diagnosis");
+    const loadingText = document.getElementById("loading");
+    const ctx = document.getElementById("chart").getContext("2d");
+
+    let rawECG = [];
+
+    let chart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [{
+          label: "Filtered EKG Signal",
+          data: [],
+          borderColor: "#e74c3c",
+          borderWidth: 2,
+          fill: false,
+          tension: 0.3,
+          pointRadius: 0
+        }]
+      },
+      options: {
+        responsive: false,
+        animation: false,
+        scales: {
+          x: { display: false },
+          y: { display: true }
+        },
+        plugins: {
+          legend: { display: false }
+        }
+      }
+    });
+
+    async function fetchLiveData() {
+      try {
+        loadingText.style.display = "block";
+        const res = await fetch("/data");
+        if (!res.ok) throw new Error("Network response not ok");
+        const data = await res.json();
+
+        rawECG = data.filter(n => typeof n === "number" && !isNaN(n));
+
+        chart.data.labels = rawECG.map((_, i) => i);
+        chart.data.datasets[0].data = rawECG;
+        chart.update();
+
+        analyzeECG();
+
+        loadingText.style.display = "none";
+      } catch (error) {
+        loadingText.style.display = "none";
+        diagnosisText.textContent = "⚠️ Error loading live data";
+        diagnosisText.style.color = "#e74c3c";
+        console.error(error);
+      }
+    }
+
+    thresholdInput.addEventListener("input", () => {
+      thresholdValue.textContent = thresholdInput.value;
+      if (rawECG.length > 0) analyzeECG();
+    });
+
+    function analyzeECG() {
+      loadingText.style.display = "block";
+      setTimeout(() => {
+        const threshold = parseFloat(thresholdInput.value);
+        const isAFib = detectAFib(rawECG, threshold);
+        diagnosisText.textContent = isAFib ? "⚠️ Likely AFib Detected" : "✅ Normal Heart Rhythm";
+        diagnosisText.style.color = isAFib ? "#e74c3c" : "#27ae60";
+        loadingText.style.display = "none";
+      }, 300);
+    }
+
+    function detectAFib(data, threshold) {
+      if (data.length < 2) return false;
+      const diffs = data.slice(1).map((val, i) => Math.abs(val - data[i]));
+      const avgDiff = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+      return avgDiff > threshold;
+    }
+
+    // Fetch live data every second
+    setInterval(fetchLiveData, 1000);
+
+    // Initial call
+    fetchLiveData();
+  </script>
+</body>
+</html>

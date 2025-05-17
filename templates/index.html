@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>EKG Monitor</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: "Roboto", sans-serif;
+        background-color: #f4f7fa;
+        overflow: hidden;
+        height: 100%;
+      }
+
+      h2 {
+        margin: 10px 0;
+        text-align: center;
+      }
+
+      #bpmDisplay {
+        color: #c0392b;
+        font-weight: bold;
+        font-size: 28px;
+      }
+
+      .container {
+        width: 80vw;
+        max-width: 1000px;
+        margin: auto;
+        padding-top: 30px;
+        box-sizing: border-box;
+      }
+
+      .chart-wrapper {
+        position: relative;
+        width: 100%;
+        height: 300px;
+        background-color: #fff;
+        border-radius: 16px;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+        overflow: hidden;
+        padding: 20px;
+        box-sizing: border-box;
+      }
+
+      .interval-info {
+        margin-top: 15px;
+        font-size: 16px;
+        text-align: center;
+        color: #34495e;
+      }
+
+      canvas {
+        width: 100% !important;
+        height: 100% !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2 id="bpmDisplay">❤️ BPM: --</h2>
+      <h2>📊 Real-Time EKG Graph</h2>
+      <div class="chart-wrapper">
+        <canvas id="ekgChart"></canvas>
+      </div>
+      <div class="interval-info">
+        ⏱ Time between EKG data batches:
+        <span id="interval">Loading...</span> seconds
+      </div>
+    </div>
+
+    <script>
+      const ctx = document.getElementById("ekgChart").getContext("2d");
+
+      const ekgChart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: [],
+          datasets: [
+            {
+              label: "EKG Signal",
+              data: [],
+              borderColor: "#00b894",
+              backgroundColor: "rgba(0, 184, 148, 0.1)",
+              borderWidth: 2,
+              tension: 0.2,
+              fill: true,
+              pointRadius: 0,
+            },
+          ],
+        },
+        options: {
+          animation: false,
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            x: {
+              display: false,
+            },
+            y: {
+              min: 0,
+              suggestedMax: 650,
+              title: {
+                display: true,
+                text: "Amplitude (mV)",
+              },
+              grid: {
+                color: "#eee",
+              },
+            },
+          },
+          plugins: {
+            legend: {
+              display: false,
+            },
+          },
+        },
+      });
+
+      const bpmDisplay = document.getElementById("bpmDisplay");
+
+      async function fetchData() {
+        try {
+          const res = await fetch("/data");
+          const { ekg, interval, bpm } = await res.json();
+
+          ekgChart.data.labels = ekg.map((_, i) => i);
+          ekgChart.data.datasets[0].data = ekg;
+          ekgChart.update();
+
+          const intervalDisplay = document.getElementById("interval");
+          intervalDisplay.textContent =
+            interval !== null ? interval + "s" : "Waiting for data...";
+
+          if (bpm !== null) {
+            bpmDisplay.textContent = `❤️ BPM: ${bpm}`;
+          } else {
+            bpmDisplay.textContent = "❤️ BPM: --";
+          }
+        } catch (err) {
+          console.error("Failed to fetch EKG data:", err);
+        }
+      }
+
+      setInterval(fetchData, 1000);
+    </script>
+  </body>
+</html>
