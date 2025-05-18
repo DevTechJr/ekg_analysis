@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 import telnetlib
 import threading
 import time
@@ -7,23 +7,31 @@ from scipy.stats import entropy
 import numpy as np
 import statistics
 from threading import Lock
+from twilio.rest import Client
 
 app = Flask(__name__)
 
-# create one global lock, near the top of the file
+# Configuration
 data_lock = Lock()
-
 EKG_HOST = "192.168.235.95"
 EKG_PORT = 23
 MAX_BUFFER_SIZE = 1000
 BATCH_SIZE = 500
 
+# Twilio configuration
+
+
+# Global state
 ekg_data = []
 last_batch_time = None
 batch_interval_seconds = None
-arrhythmia_detected = False
+bpm = None
 vfib_detected = False
 afib_detected = False
+alert_triggered = False  # Tracks if any alert has ever been triggered
+current_alert = None     # Tracks the current alert state ('vfib' or 'afib')
+emergency_call_made = False  # Prevents multiple calls for the same alert
+monitoring_active = True  # Default to active monitoring
 
 def format_ekg_preview(data):
     preview = ", ".join(str(v) for v in data[:10])
@@ -123,16 +131,11 @@ def arrhythmia_exists(EKGvals):
         return False
         
     st_dev = statistics.stdev(peak_distances)
-    mean_distance = statistics.mean(peak_distances)
-    
-    # Thresholds for arrhythmia detection
-    return st_dev > 20 or mean_distance < 100 or mean_distance > 180
+    return st_dev > 20
 
-def detect_vfib_afib(EKGvals):
-    global vfib_detected, afib_detected
-    
+def detect_vfib(EKGvals):
     if len(EKGvals) < 100:  # Need enough data for reliable detection
-        return False, False
+        return False
     
     y = np.array(EKGvals)
     
@@ -154,26 +157,17 @@ def detect_vfib_afib(EKGvals):
         Pxx_norm = Pxx / np.sum(Pxx)
         return entropy(Pxx_norm)
     
-    def count_r_peaks(signal_segment, height_thresh=0.5, distance=20):
-        peaks, _ = find_peaks(signal_segment, height=height_thresh, distance=distance)
-        return len(peaks)
-    
     # Analyze windows
     vfib_windows = []
-    flatline_windows = []
     
     for i in range(0, len(y_smooth) - window_size, stride):
         window = y_smooth[i:i + window_size]
         rms = compute_rms(window)
         ent = compute_spectral_entropy(window)
-        peak_count = count_r_peaks(window, height_thresh=0.5, distance=20)
         
         # VFib detection criteria
         if rms < 0.4 and ent > 1.8:
             vfib_windows.append((i, i + window_size))
-        # Flatline detection
-        elif rms < 0.25 and ent < 1.5:
-            flatline_windows.append((i, i + window_size))
     
     # Merge adjacent windows
     def merge_windows(windows, max_gap=1):
@@ -194,15 +188,31 @@ def detect_vfib_afib(EKGvals):
     
     # Final VFib detection requires at least 3 seconds of continuous VFib
     vfib_duration_threshold = 3 * window_size
-    vfib_detected = any((end - start) >= vfib_duration_threshold 
-                     for start, end in vfib_windows_merged)
-    
-    # AFib is detected if arrhythmia exists but not VFib
-    afib_detected = not vfib_detected and arrhythmia_exists(EKGvals)
-    
-    return vfib_detected, afib_detected
+    return any((end - start) >= vfib_duration_threshold 
+              for start, end in vfib_windows_merged)
 
-threading.Thread(target=read_ekg_data, daemon=True).start()
+def make_emergency_call():
+    global emergency_call_made
+    try:
+        if not emergency_call_made and monitoring_active:
+            client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            call = client.calls.create(
+                url=TWILIO_CALL_URL,
+                to=TWILIO_TO_NUMBER,
+                from_=TWILIO_FROM_NUMBER
+            )
+            print(f"🚨 EMERGENCY CALL INITIATED! Call SID: {call.sid}")
+            emergency_call_made = True
+    except Exception as e:
+        print(f"❌ Failed to make emergency call: {e}")
+
+@app.route("/toggle_monitoring", methods=['POST'])
+def toggle_monitoring():
+    global monitoring_active
+    monitoring_active = request.json.get('active', True)
+    status = "active" if monitoring_active else "inactive"
+    print(f"Monitoring system is now {status}")
+    return jsonify({"status": "success", "monitoring_active": monitoring_active})
 
 @app.route("/")
 def index():
@@ -210,32 +220,43 @@ def index():
 
 @app.route("/data")
 def get_data():
-    global arrhythmia_detected, vfib_detected, afib_detected
+    global bpm, vfib_detected, afib_detected, alert_triggered, current_alert, emergency_call_made
     
     with data_lock:
         ekg_snapshot = ekg_data[-BATCH_SIZE:]
         interval_snapshot = batch_interval_seconds
 
+    # Reset temporary detection states
+    vfib_detected = False
+    afib_detected = False
+
     # Only use the interval if it's within a valid range (2.8–3.3 seconds)
     if interval_snapshot and 2.8 <= interval_snapshot <= 3.3:
-        bpm = calculate_bpm(
-            ekg_snapshot,
-            interval_snapshot * 1000
-        )
-        # Run arrhythmia detection only when we have a valid interval
-        arrhythmia_detected = arrhythmia_exists(ekg_snapshot)
+        bpm = calculate_bpm(ekg_snapshot, interval_snapshot * 1000)
         
-        # If arrhythmia detected, run VFib/AFib detection
-        if arrhythmia_detected:
-            vfib_detected, afib_detected = detect_vfib_afib(ekg_snapshot)
-            if vfib_detected:
-                print("⚠️⚠️⚠️ VENTRICULAR FIBRILLATION DETECTED! ⚠️⚠️⚠️")
-            elif afib_detected:
-                print("⚠️⚠️⚠️ ATRIAL FIBRILLATION DETECTED! ⚠️⚠️⚠️")
+        # Only check for problems if monitoring is active
+        if monitoring_active:
+            # First check for VFib
+            vfib_detected = detect_vfib(ekg_snapshot)
+            
+            # If not VFib, check for AFib
+            if not vfib_detected:
+                afib_detected = arrhythmia_exists(ekg_snapshot)
+            
+            # Update alert states
+            if vfib_detected or afib_detected:
+                if not alert_triggered:
+                    alert_triggered = True
+                    make_emergency_call()
+                
+                if vfib_detected:
+                    current_alert = 'vfib'
+                    print("⚠️⚠️⚠️ VENTRICULAR FIBRILLATION DETECTED! ⚠️⚠️⚠️")
+                else:
+                    current_alert = 'afib'
+                    print("⚠️⚠️⚠️ ATRIAL FIBRILLATION DETECTED! ⚠️⚠️⚠️")
     else:
-        bpm = None  # Skip BPM calculation for bad intervals
-        vfib_detected = False
-        afib_detected = False
+        bpm = None  # Skip calculations for bad intervals
 
     if bpm is not None:
         print(f"❤️ Calculated BPM: {bpm}")
@@ -246,10 +267,15 @@ def get_data():
         "ekg": ekg_snapshot,
         "interval": interval_snapshot,
         "bpm": bpm,
-        "arrhythmia": arrhythmia_detected,
         "vfib": vfib_detected,
-        "afib": afib_detected
+        "afib": afib_detected,
+        "alert_triggered": alert_triggered,
+        "current_alert": current_alert,
+        "monitoring_active": monitoring_active
     })
+
+# Start the EKG data reading thread
+threading.Thread(target=read_ekg_data, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(debug=True)

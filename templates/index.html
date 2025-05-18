@@ -32,7 +32,6 @@
         text-align: center;
         font-size: 1.1em;
       }
-      #arrhythmiaWarning,
       #vfibWarning,
       #afibWarning {
         display: none;
@@ -42,19 +41,17 @@
         margin-top: 15px;
         padding: 10px;
         border-radius: 5px;
-        animation: flash 1s infinite;
-      }
-      #arrhythmiaWarning {
-        color: #e74c3c;
-        background: rgba(231, 76, 60, 0.1);
+        animation: flash 0.5s infinite;
       }
       #vfibWarning {
         color: #d35400;
-        background: rgba(211, 84, 0, 0.1);
+        background: rgba(211, 84, 0, 0.2);
+        border: 2px solid #d35400;
       }
       #afibWarning {
         color: #f39c12;
-        background: rgba(243, 156, 18, 0.1);
+        background: rgba(243, 156, 18, 0.2);
+        border: 2px solid #f39c12;
       }
       @keyframes flash {
         0%,
@@ -62,7 +59,7 @@
           opacity: 1;
         }
         50% {
-          opacity: 0.5;
+          opacity: 0.7;
         }
       }
       .status-indicator {
@@ -75,9 +72,6 @@
       .status-normal {
         background-color: #2ecc71;
       }
-      .status-warning {
-        background-color: #e74c3c;
-      }
       .status-vfib {
         background-color: #d35400;
       }
@@ -89,6 +83,76 @@
         flex-direction: column;
         gap: 10px;
       }
+      #callStatus {
+        font-size: 1.2em;
+        font-weight: bold;
+        color: #e74c3c;
+        text-align: center;
+        margin-top: 10px;
+      }
+      #historyWarning {
+        font-size: 1.1em;
+        color: #7f8c8d;
+        text-align: center;
+        margin-top: 10px;
+        font-style: italic;
+      }
+      .toggle-container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 15px 0;
+      }
+      .toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 60px;
+        height: 34px;
+        margin: 0 10px;
+      }
+      .toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+      .toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: 0.4s;
+        border-radius: 34px;
+      }
+      .toggle-slider:before {
+        position: absolute;
+        content: "";
+        height: 26px;
+        width: 26px;
+        left: 4px;
+        bottom: 4px;
+        background-color: white;
+        transition: 0.4s;
+        border-radius: 50%;
+      }
+      input:checked + .toggle-slider {
+        background-color: #2196f3;
+      }
+      input:checked + .toggle-slider:before {
+        transform: translateX(26px);
+      }
+      .toggle-label {
+        font-size: 1.1em;
+        font-weight: bold;
+      }
+      .toggle-on {
+        color: #2196f3;
+      }
+      .toggle-off {
+        color: #ccc;
+      }
     </style>
   </head>
   <body>
@@ -97,6 +161,16 @@
         <span id="statusIndicator" class="status-indicator status-normal"></span
         >📈 Real-Time EKG Monitor
       </h1>
+
+      <div class="toggle-container">
+        <span class="toggle-label toggle-off" id="toggleOffLabel">OFF</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="monitoringToggle" checked />
+          <span class="toggle-slider"></span>
+        </label>
+        <span class="toggle-label toggle-on" id="toggleOnLabel">ON</span>
+      </div>
+
       <canvas id="ekgChart" width="800" height="300"></canvas>
       <div class="info" id="interval-info">
         Data Interval: <span id="interval">Loading...</span>
@@ -104,18 +178,17 @@
       <div class="info" id="bpmDisplay">❤️ BPM: --</div>
 
       <div class="alert-container">
-        <div id="arrhythmiaWarning">
-          <i class="fas fa-heartbeat"></i> ⚠️ ARRHYTHMIA DETECTED!
-          <i class="fas fa-heartbeat"></i>
-        </div>
         <div id="vfibWarning">
           <i class="fas fa-heartbeat"></i> ⚠️⚠️ VENTRICULAR FIBRILLATION
-          DETECTED! ⚠️⚠️ <i class="fas fa-heartbeat"></i>
-        </div>
-        <div id="afibWarning">
-          <i class="fas fa-heartbeat"></i> ⚠️ ATRIAL FIBRILLATION DETECTED! ⚠️
+          DETECTED! EMERGENCY CALL INITIATED! ⚠️⚠️
           <i class="fas fa-heartbeat"></i>
         </div>
+        <div id="afibWarning">
+          <i class="fas fa-heartbeat"></i> ⚠️ ATRIAL FIBRILLATION DETECTED!
+          EMERGENCY CALL INITIATED! ⚠️ <i class="fas fa-heartbeat"></i>
+        </div>
+        <div id="historyWarning"></div>
+        <div id="callStatus"></div>
       </div>
     </div>
 
@@ -151,50 +224,124 @@
       });
 
       const bpmDisplay = document.getElementById("bpmDisplay");
-      const arrhythmiaWarning = document.getElementById("arrhythmiaWarning");
       const vfibWarning = document.getElementById("vfibWarning");
       const afibWarning = document.getElementById("afibWarning");
+      const historyWarning = document.getElementById("historyWarning");
       const statusIndicator = document.getElementById("statusIndicator");
+      const intervalDisplay = document.getElementById("interval");
+      const callStatus = document.getElementById("callStatus");
+      const monitoringToggle = document.getElementById("monitoringToggle");
+      const toggleOnLabel = document.getElementById("toggleOnLabel");
+      const toggleOffLabel = document.getElementById("toggleOffLabel");
+
+      let problemDetected = false;
+      let currentProblem = null;
+      let monitoringActive = true;
+
+      // Toggle switch event listener
+      monitoringToggle.addEventListener("change", function () {
+        monitoringActive = this.checked;
+        updateToggleUI();
+
+        fetch("/toggle_monitoring", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ active: monitoringActive }),
+        });
+      });
+
+      function updateToggleUI() {
+        if (monitoringActive) {
+          toggleOnLabel.style.color = "#2196F3";
+          toggleOffLabel.style.color = "#ccc";
+        } else {
+          toggleOnLabel.style.color = "#ccc";
+          toggleOffLabel.style.color = "#2196F3";
+        }
+      }
 
       async function fetchData() {
         try {
           const res = await fetch("/data");
-          const { ekg, interval, bpm, arrhythmia, vfib, afib } =
-            await res.json();
+          const {
+            ekg,
+            interval,
+            bpm,
+            vfib,
+            afib,
+            alert_triggered,
+            current_alert,
+            monitoring_active,
+          } = await res.json();
 
+          // Update monitoring state if changed by another session
+          if (monitoringActive !== monitoring_active) {
+            monitoringActive = monitoring_active;
+            monitoringToggle.checked = monitoringActive;
+            updateToggleUI();
+          }
+
+          // Update chart
           ekgChart.data.labels = ekg.map((_, i) => i);
           ekgChart.data.datasets[0].data = ekg;
           ekgChart.update();
 
-          document.getElementById("interval").textContent =
+          // Update interval display
+          intervalDisplay.textContent =
             interval !== null ? interval + "s" : "Waiting for data...";
+
+          // Update BPM display
           bpmDisplay.textContent =
             bpm !== null ? `❤️ BPM: ${bpm}` : "❤️ BPM: --";
 
-          // Update warning displays
-          arrhythmiaWarning.style.display = arrhythmia ? "block" : "none";
-          vfibWarning.style.display = vfib ? "block" : "none";
-          afibWarning.style.display = afib ? "block" : "none";
+          // Update problem tracking (only if monitoring is active)
+          if (monitoringActive && (vfib || afib)) {
+            problemDetected = true;
+            currentProblem = vfib ? "vfib" : "afib";
+          }
 
-          // Update status indicator
-          if (vfib) {
-            statusIndicator.className = "status-indicator status-vfib";
-            document.title = "⚠️ VFIB DETECTED - EKG Monitor";
-          } else if (afib) {
-            statusIndicator.className = "status-indicator status-afib";
-            document.title = "⚠️ AFIB DETECTED - EKG Monitor";
-          } else if (arrhythmia) {
-            statusIndicator.className = "status-indicator status-warning";
-            document.title = "⚠️ ARRHYTHMIA - EKG Monitor";
+          // Update warning displays
+          if (problemDetected) {
+            if (currentProblem === "vfib") {
+              vfibWarning.style.display = "block";
+              afibWarning.style.display = "none";
+              statusIndicator.className = "status-indicator status-vfib";
+              document.title = "⚠️ VFIB DETECTED - EKG Monitor";
+              callStatus.textContent = monitoringActive
+                ? "🚨 EMERGENCY CALL INITIATED!"
+                : "🚨 (Detection paused) VFIB was detected";
+              historyWarning.textContent =
+                "Ventricular fibrillation was detected in this session";
+            } else if (currentProblem === "afib") {
+              afibWarning.style.display = "block";
+              vfibWarning.style.display = "none";
+              statusIndicator.className = "status-indicator status-afib";
+              document.title = "⚠️ AFIB DETECTED - EKG Monitor";
+              callStatus.textContent = monitoringActive
+                ? "🚨 EMERGENCY CALL INITIATED!"
+                : "🚨 (Detection paused) AFIB was detected";
+              historyWarning.textContent =
+                "Atrial fibrillation was detected in this session";
+            }
           } else {
             statusIndicator.className = "status-indicator status-normal";
-            document.title = "Real-Time EKG Monitor";
+            document.title = monitoringActive
+              ? "Real-Time EKG Monitor"
+              : "EKG Monitor (Detection Paused)";
+            callStatus.textContent = monitoringActive
+              ? "System ready"
+              : "Detection system paused";
+            historyWarning.textContent = "";
           }
         } catch (err) {
           console.error("Failed to fetch EKG data:", err);
         }
       }
 
+      // Initialize UI
+      updateToggleUI();
       setInterval(fetchData, 1000);
     </script>
   </body>
